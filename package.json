@@ -1,0 +1,12 @@
+{
+  "name": "allerlens",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "web:dev": "pnpm --filter @allerlens/web dev"
+  }
+}

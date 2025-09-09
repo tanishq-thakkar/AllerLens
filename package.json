@@ -8,5 +8,8 @@
   ],
   "scripts": {
     "web:dev": "pnpm --filter @allerlens/web dev"
+  },
+  "dependencies": {
+    "next-pwa": "^5.6.0"
   }
 }

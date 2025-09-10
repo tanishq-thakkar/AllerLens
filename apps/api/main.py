@@ -32,10 +32,19 @@ app.add_middleware(
 # ---- OpenAI setup ----
 OPENAI_MODEL_VLM = "gpt-4o-mini"   # vision + text
 OPENAI_MODEL_TEXT = "gpt-4o-mini"  # text reasoning for MVP
+AI_MODE = os.getenv("AI_MODE", "real").lower()  # "real" or "mock"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY is missing. Set it in apps/api/.env or export it in your shell.")
-client = OpenAI(api_key=OPENAI_API_KEY)
+
+print(f"🤖 AI_MODE: {AI_MODE}")
+
+if AI_MODE == "real":
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is missing. Set it in apps/api/.env or export it in your shell.")
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    print("✅ OpenAI client initialized for REAL mode")
+else:
+    client = None
+    print("🎭 Running in MOCK mode - no OpenAI API calls will be made")
 
 # ---- Storage (MVP in-memory) ----
 MENUS: Dict[str, Dict[str, Any]] = {}  # {menu_id: {"path":..., "parsed":[...]}}
@@ -189,7 +198,55 @@ def call_o4mini_parse(image_bytes: bytes, page_no: int) -> Dict[str, Any]:
     print(f"🖼️  Image size: {len(image_bytes)} bytes")
     print(f"🤖 Model: {OPENAI_MODEL_VLM}")
     print(f"🌡️  Temperature: 0.1")
+    print(f"🎭 AI_MODE: {AI_MODE}")
     
+    # Return mock response if in mock mode
+    if AI_MODE == "mock":
+        print(f"🎭 MOCK MODE: Returning mock response...")
+        mock_response = {
+            "page": page_no,
+            "items": [
+                {
+                    "name": "Grilled Chicken Caesar Salad",
+                    "ingredients": ["chicken", "romaine lettuce", "parmesan cheese", "caesar dressing", "croutons"],
+                    "price": 14.99,
+                    "section": "Salads",
+                    "bbox": [100, 100, 300, 150]
+                },
+                {
+                    "name": "Peanut Butter Chocolate Cake",
+                    "ingredients": ["flour", "sugar", "eggs", "peanut butter", "chocolate", "butter"],
+                    "price": 8.99,
+                    "section": "Desserts",
+                    "bbox": [100, 200, 300, 250]
+                }
+            ],
+            "icons": [
+                {
+                    "label": "peanut",
+                    "bbox": [50, 200, 80, 230],
+                    "confidence": 0.9
+                },
+                {
+                    "label": "dairy",
+                    "bbox": [50, 100, 80, 130],
+                    "confidence": 0.8
+                }
+            ],
+            "tables": []
+        }
+        
+        print(f"🎭 Mock response:")
+        print(f"{'-'*40}")
+        print(json.dumps(mock_response, indent=2))
+        print(f"{'-'*40}")
+        print(f"📋 Mock: {len(mock_response.get('items', []))} menu items")
+        print(f"🏷️  Mock: {len(mock_response.get('icons', []))} icons")
+        print(f"📊 Mock: {len(mock_response.get('tables', []))} tables")
+        
+        return mock_response
+    
+    # Real API call
     try:
         print(f"📡 Making OpenAI API call...")
         resp = client.chat.completions.create(
@@ -226,9 +283,9 @@ def call_o4mini_parse(image_bytes: bytes, page_no: int) -> Dict[str, Any]:
         
     except Exception as e:
         print(f"❌ OpenAI API Error: {e}")
-        print(f"🔄 Returning mock response for development...")
+        print(f"🔄 Returning fallback mock response...")
         
-        mock_response = {
+        fallback_response = {
             "page": page_no,
             "items": [
                 {
@@ -249,12 +306,12 @@ def call_o4mini_parse(image_bytes: bytes, page_no: int) -> Dict[str, Any]:
             "tables": []
         }
         
-        print(f"🎭 Mock response:")
+        print(f"🎭 Fallback response:")
         print(f"{'-'*40}")
-        print(json.dumps(mock_response, indent=2))
+        print(json.dumps(fallback_response, indent=2))
         print(f"{'-'*40}")
         
-        return mock_response
+        return fallback_response
 
 def call_o4mini_answer(parsed_pages: List[Dict[str, Any]], profile: Profile, question: str) -> Dict[str, Any]:
     sys = (
@@ -277,7 +334,53 @@ def call_o4mini_answer(parsed_pages: List[Dict[str, Any]], profile: Profile, que
     print(f"🌡️  Temperature: 0.2")
     print(f"📝 System prompt: {sys}")
     print(f"💬 User prompt length: {len(user)} characters")
+    print(f"🎭 AI_MODE: {AI_MODE}")
     
+    # Return mock response if in mock mode
+    if AI_MODE == "mock":
+        print(f"🎭 MOCK MODE: Returning mock analysis...")
+        
+        # Generate contextual mock response based on question
+        mock_response = {
+            "result": "unsafe" if "peanut" in question.lower() or "allerg" in question.lower() else "safe",
+            "reasons": [
+                "Peanut Butter Chocolate Cake contains peanuts (allergen)",
+                "Caesar Salad contains dairy (parmesan cheese)"
+            ] if "peanut" in question.lower() or "allerg" in question.lower() else [
+                "No allergens detected in requested items",
+                "All ingredients appear safe for your profile"
+            ],
+            "alternatives": [
+                "Grilled Chicken Caesar Salad (without parmesan)",
+                "Ask server about dairy-free options"
+            ] if "peanut" in question.lower() or "allerg" in question.lower() else [
+                "All current menu items appear safe",
+                "Consider asking about preparation methods"
+            ],
+            "citations": [
+                {
+                    "page": 1,
+                    "bbox": [50, 200, 80, 230],
+                    "type": "icon",
+                    "text": "Peanut allergen icon detected"
+                }
+            ] if "peanut" in question.lower() or "allerg" in question.lower() else [],
+            "summary": "⚠️ UNSAFE: Peanut Butter Chocolate Cake contains peanuts which are in your allergen list. Caesar Salad contains dairy. Consider safer alternatives." if "peanut" in question.lower() or "allerg" in question.lower() else "✅ SAFE: No allergens detected in the menu items. All ingredients appear safe for your dietary profile."
+        }
+        
+        print(f"🎭 Mock response:")
+        print(f"{'-'*40}")
+        print(json.dumps(mock_response, indent=2))
+        print(f"{'-'*40}")
+        print(f"🔍 Mock result: {mock_response.get('result', 'unknown')}")
+        print(f"📝 Mock summary: {mock_response.get('summary', 'No summary')}")
+        print(f"📋 Mock reasons: {len(mock_response.get('reasons', []))} items")
+        print(f"🔄 Mock alternatives: {len(mock_response.get('alternatives', []))} items")
+        print(f"📚 Mock citations: {len(mock_response.get('citations', []))} items")
+        
+        return mock_response
+    
+    # Real API call
     try:
         print(f"📡 Making OpenAI API call...")
         resp = client.chat.completions.create(
@@ -311,9 +414,9 @@ def call_o4mini_answer(parsed_pages: List[Dict[str, Any]], profile: Profile, que
         
     except Exception as e:
         print(f"❌ OpenAI API Error: {e}")
-        print(f"🔄 Returning mock response for development...")
+        print(f"🔄 Returning fallback mock response...")
         
-        mock_response = {
+        fallback_response = {
             "result": "ask_server",
             "reasons": ["OpenAI API quota exceeded - please check billing"],
             "alternatives": ["Contact server administrator for API access"],
@@ -321,12 +424,12 @@ def call_o4mini_answer(parsed_pages: List[Dict[str, Any]], profile: Profile, que
             "summary": "Unable to analyze menu due to API quota limits. Please check OpenAI billing settings."
         }
         
-        print(f"🎭 Mock response:")
+        print(f"🎭 Fallback response:")
         print(f"{'-'*40}")
-        print(json.dumps(mock_response, indent=2))
+        print(json.dumps(fallback_response, indent=2))
         print(f"{'-'*40}")
         
-        return mock_response
+        return fallback_response
 
 # ---- Routes ----
 @app.get("/health")

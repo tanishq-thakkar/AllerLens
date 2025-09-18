@@ -184,10 +184,17 @@ def pdf_to_images(pdf_path: str) -> List[bytes]:
         out.append(buf.getvalue())
     return out
 
-def call_o4mini_parse(image_bytes: bytes, page_no: int) -> Dict[str, Any]:
+def call_o4mini_parse(image_bytes: bytes, page_no: int, user_allergies: List[str] = None) -> Dict[str, Any]:
+    # Enhanced prompt with allergy focus
+    allergy_context = ""
+    if user_allergies and len(user_allergies) > 0:
+        allergy_list = ", ".join(user_allergies)
+        allergy_context = f"\n\nIMPORTANT: The user has these allergies: {allergy_list}. Pay special attention to detecting these allergens in menu items and mark them clearly in the icons section with high confidence."
+    
     prompt = (
         "You are a structured menu parser. Return STRICT JSON with keys: page, items, icons, tables. "
         "Use pixel coordinates for bbox. Be conservative; omit if unsure."
+        f"{allergy_context}"
     )
     b64 = img_bytes_to_base64(image_bytes)
     
@@ -199,6 +206,7 @@ def call_o4mini_parse(image_bytes: bytes, page_no: int) -> Dict[str, Any]:
     print(f"🤖 Model: {OPENAI_MODEL_VLM}")
     print(f"🌡️  Temperature: 0.1")
     print(f"🎭 AI_MODE: {AI_MODE}")
+    print(f"🚨 User Allergies: {user_allergies if user_allergies else 'None specified'}")
     
     # Return mock response if in mock mode
     if AI_MODE == "mock":
@@ -340,20 +348,31 @@ def call_o4mini_answer(parsed_pages: List[Dict[str, Any]], profile: Profile, que
     if AI_MODE == "mock":
         print(f"🎭 MOCK MODE: Returning mock analysis...")
         
-        # Generate contextual mock response based on question
+        # Generate contextual mock response based on user allergies and question
+        user_allergies_lower = [allergy.lower() for allergy in profile.allergens]
+        has_peanut_allergy = any('peanut' in allergy for allergy in user_allergies_lower)
+        has_dairy_allergy = any('dairy' in allergy for allergy in user_allergies_lower)
+        
+        # Check if question mentions allergens or if user has relevant allergies
+        question_lower = question.lower()
+        mentions_allergens = any(allergy in question_lower for allergy in user_allergies_lower) or "allerg" in question_lower
+        
+        is_unsafe = has_peanut_allergy or has_dairy_allergy or mentions_allergens
+        
         mock_response = {
-            "result": "unsafe" if "peanut" in question.lower() or "allerg" in question.lower() else "safe",
+            "result": "unsafe" if is_unsafe else "safe",
             "reasons": [
-                "Peanut Butter Chocolate Cake contains peanuts (allergen)",
-                "Caesar Salad contains dairy (parmesan cheese)"
-            ] if "peanut" in question.lower() or "allerg" in question.lower() else [
+                "Peanut Butter Chocolate Cake contains peanuts (allergen)" if has_peanut_allergy else "",
+                "Caesar Salad contains dairy (parmesan cheese)" if has_dairy_allergy else ""
+            ] if is_unsafe else [
                 "No allergens detected in requested items",
                 "All ingredients appear safe for your profile"
             ],
             "alternatives": [
-                "Grilled Chicken Caesar Salad (without parmesan)",
-                "Ask server about dairy-free options"
-            ] if "peanut" in question.lower() or "allerg" in question.lower() else [
+                "Grilled Chicken Caesar Salad (without parmesan)" if has_dairy_allergy else "",
+                "Ask server about dairy-free options" if has_dairy_allergy else "",
+                "Ask server about nut-free dessert options" if has_peanut_allergy else ""
+            ] if is_unsafe else [
                 "All current menu items appear safe",
                 "Consider asking about preparation methods"
             ],
@@ -363,10 +382,21 @@ def call_o4mini_answer(parsed_pages: List[Dict[str, Any]], profile: Profile, que
                     "bbox": [50, 200, 80, 230],
                     "type": "icon",
                     "text": "Peanut allergen icon detected"
-                }
-            ] if "peanut" in question.lower() or "allerg" in question.lower() else [],
-            "summary": "⚠️ UNSAFE: Peanut Butter Chocolate Cake contains peanuts which are in your allergen list. Caesar Salad contains dairy. Consider safer alternatives." if "peanut" in question.lower() or "allerg" in question.lower() else "✅ SAFE: No allergens detected in the menu items. All ingredients appear safe for your dietary profile."
+                } if has_peanut_allergy else None,
+                {
+                    "page": 1,
+                    "bbox": [50, 100, 80, 130],
+                    "type": "icon", 
+                    "text": "Dairy allergen icon detected"
+                } if has_dairy_allergy else None
+            ] if is_unsafe else [],
+            "summary": f"⚠️ UNSAFE: Menu contains items with your allergens ({', '.join(profile.allergens)}). Consider safer alternatives." if is_unsafe else f"✅ SAFE: No allergens detected in the menu items. All ingredients appear safe for your dietary profile (allergies: {', '.join(profile.allergens)})."
         }
+        
+        # Filter out empty reasons and alternatives
+        mock_response["reasons"] = [r for r in mock_response["reasons"] if r]
+        mock_response["alternatives"] = [a for a in mock_response["alternatives"] if a]
+        mock_response["citations"] = [c for c in mock_response["citations"] if c]
         
         print(f"🎭 Mock response:")
         print(f"{'-'*40}")
@@ -465,12 +495,16 @@ async def upload_menu(file: UploadFile = File(...)):
     
     return {"menu_id": menu_id, "filename": file.filename}
 
+class ParseRequest(BaseModel):
+    allergies: List[str] = []
+
 @app.post("/menus/{menu_id}/parse")
-def parse_menu(menu_id: str):
+def parse_menu(menu_id: str, request: ParseRequest):
     print(f"\n{'='*60}")
     print(f"🔍 MENU PARSE REQUEST")
     print(f"{'='*60}")
     print(f"🆔 Menu ID: {menu_id}")
+    print(f"🚨 User Allergies: {request.allergies if request.allergies else 'None specified'}")
     
     info = MENUS.get(menu_id)
     if not info:
@@ -489,13 +523,13 @@ def parse_menu(menu_id: str):
         print(f"📄 PDF has {len(images)} pages")
         for i, img_bytes in enumerate(images, start=1):
             print(f"🔄 Processing page {i}/{len(images)}")
-            parsed_pages.append(call_o4mini_parse(img_bytes, page_no=i))
+            parsed_pages.append(call_o4mini_parse(img_bytes, page_no=i, user_allergies=request.allergies))
     else:
         print(f"🖼️  Processing image file...")
         with open(path, "rb") as f:
             img_bytes = f.read()
         print(f"📊 Image size: {len(img_bytes)} bytes")
-        parsed_pages.append(call_o4mini_parse(img_bytes, page_no=1))
+        parsed_pages.append(call_o4mini_parse(img_bytes, page_no=1, user_allergies=request.allergies))
 
     MENUS[menu_id]["parsed"] = parsed_pages
     cache_file = os.path.join(TMP, f"{menu_id}_parsed.json")

@@ -55,12 +55,15 @@ export default function Page() {
     if (!menuId) return;
     console.log("Parsing menu with ID:", menuId);
     console.log("API Base URL:", apiBase);
+    console.log("Selected allergies:", selectedAllergies);
     setUploadStatus("Parsing menu...");
     try {
       const url = `${apiBase}/menus/${menuId}/parse`;
       console.log("Fetching URL:", url);
       const res = await fetch(url, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allergies: selectedAllergies }),
       });
       console.log("Response status:", res.status);
       if (!res.ok) {
